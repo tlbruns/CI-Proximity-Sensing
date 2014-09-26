@@ -1,6 +1,6 @@
 // Uses Teensy 3.1 to read capacitance values and display them on a TFT screen
 // Trevor Bruns
-// Last Revised: July 30 2014 (Ver 3.0)
+// Last Revised: Aug 5 2014 (Ver 3.1)
 
 #include <Adafruit_GFX.h>    // Core graphics library
 #include <Adafruit_ILI9340.h> // Hardware-specific library
@@ -13,11 +13,12 @@
 #endif
 
 #define COLOR_BACKGROUND 0x0000
-#define COLOR_TEXT1      ILI9340_GREEN
-#define COLOR_TEXT2      ILI9340_WHITE
-#define COLOR_TEXT3      ILI9340_BLUE
+#define COLOR_TEXT1      0x07E0 // GREEN
+#define COLOR_TEXT2      0xFFFF // WHITE
+#define COLOR_TEXT3      0x001F // BLUE
 #define COLOR_TEXT4      0XFCC0
-#define COLOR_RECT       ILI9340_WHITE
+#define COLOR_TEXT5      0xF800 // RED
+#define COLOR_RECT       0xFFFF // WHITE
 
 const char TFT_RST = 14;
 const char TFT_DC = 20;
@@ -34,8 +35,8 @@ volatile boolean datalog_state = false; // current state of datalogging
 // set up variables for SD card data logging
 File dataFile;
 
-const byte numtouchPins = 6;
-const int touchPin[numtouchPins] = {0,1,18,19,22,23};
+const byte numtouchPins = 9;
+const int touchPin[numtouchPins] = {0,1,15,16,17,18,19,22,23};
 unsigned int ELEdata[numtouchPins]; // array to store raw data from ADC
 double Capdata[numtouchPins];	    // array to store capacitance values
 
@@ -101,7 +102,7 @@ void setup()
     if (!SD.begin(SD_CS)) {
       Serial.println(F("failed!"));
       tft.setCursor(25,150);
-      tft.setTextColor(ILI9340_RED);
+      tft.setTextColor(COLOR_TEXT5);
       tft.setTextSize(4);
       tft.print(F("NO SD CARD!!"));
       delay(2000);
@@ -143,20 +144,24 @@ void loop()
         newfile();  // start new file
       else{
         dataFile.close();  // close file
-        tft.setCursor(20, 195);
+        tft.setCursor(20, 205);
         tft.setTextColor(COLOR_TEXT4,COLOR_BACKGROUND);  
         tft.setTextSize(2);
         tft.print(F("data logging stopped  "));
       }
     }
     
-    // save data to SD card
-    if(datalog_flag)      
+    // write data to SD card
+    if(datalog_flag) {
       datalog(Capdata);
-  }
+      if(loop_counter>100) {
+        dataFile.flush();  // "saves" data every 100 samples (~4 sec)
+        loop_counter=0; 
+      }    
+    }
   
   // suppress screen 7/8 loops when logging to increase speed
-  if(datalog_flag && loop_counter%5 != 0)
+  if(datalog_flag && loop_counter%8 != 0)
     delay(20); // slow down to limit amount of data
   else{
     tft.setTextSize(2);
@@ -179,6 +184,7 @@ void loop()
   tft.print(loop_time,2);
   tft.print(F(" ms   "));
   loop_counter++;
+  }
 }
 
 //*****************************************************************************//
@@ -190,8 +196,6 @@ void newfile()
   for (uint8_t i = 0; i < 100; i++) {
     filename[5] = i/10 + '0';
     filename[6] = i%10 + '0';
-//    Serial.print(F("checking suffix "));
-//    Serial.println(filename);
     if (!SD.exists(filename)) {
       // only open a new file if it doesn't exist
       dataFile = SD.open(filename, FILE_WRITE);
@@ -211,7 +215,7 @@ void newfile()
     
     
       // Output status to TFT
-      tft.setCursor(20, 195);
+      tft.setCursor(20, 205);
       tft.setTextColor(COLOR_TEXT4,COLOR_BACKGROUND);  
       tft.setTextSize(2);
       tft.print(F("saving to ")); 
