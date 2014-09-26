@@ -1,6 +1,6 @@
 // Uses MPR03X to read capacitance values and displays them on a TFT screen
 // Trevor Bruns
-// Last Revised: July 7 2014
+// Last Revised: June 24 2014
 
 #include <Wire.h>    // I2C library
 #include "MPR03X.h"  // Cap Sensing IC library
@@ -8,11 +8,6 @@
 #include <Adafruit_ILI9340.h> // Hardware-specific library
 #include <SPI.h>
 #include <SD.h>    // SD card library
-
-#define       NO_PORTB_PINCHANGES // change these based on datalog_pin port
-#define       NO_PORTC_PINCHANGES
-//#define       NO_PORTD_PINCHANGES
-#include <PinChangeInt.h> // allows for more than 2 interrupts
 
 #if defined(__SAM3X8E__)
     #undef __FlashStringHelper::F(string_literal)
@@ -33,17 +28,17 @@
 
 Adafruit_ILI9340 tft = Adafruit_ILI9340(TFT_CS, TFT_DC, TFT_RST);
 
+int datalog_pin = 0; // button to start/stop datalogging. NOTE: analog input
+boolean datalog_flag = false;  // start false, triggered true
+boolean datalog_state = false; // current state of datalogging
+
 int Vin_pin = A3;  // voltage monitor to ensure accurate capacitance calculations
 double Vin_value = 0;
 
 int CDC = 10; // Charge/Discharge Current (uA)
 int CDT = 3; // Charge/Discharge Time (1->0.5us, 2->1us, ..., 7->32us)
-
-int datalog_pin = 7;
-volatile boolean datalog_flag = false;  // start false, triggered true
 volatile boolean CDC_up_flag = false;
 volatile boolean CDC_down_flag = false;
-
 
 // set up variables for SD card data logging
 File dataFile;
@@ -53,27 +48,22 @@ void setup()
   Serial.begin(115200);	// start serial communication
   
   if(LOG_DATA){
-    // initialize SD card
-    Serial.print("Initializing SD card...");
+    Serial.print(F("Initializing SD card..."));
     if (!SD.begin(SD_CS)) {
-      Serial.println("failed!");
+      Serial.println(F("failed!"));
       return;
     }
-    Serial.println("card initialized");
-    
-    // attach interrupt for button
-    pinMode(datalog_pin, INPUT);
-    PCintPort::attachInterrupt(datalog_pin, &datalog_int, CHANGE);
+    Serial.println(F("card initialized"));
   }
   
-  attachInterrupt(0,CDC_down,LOW);  // allow CDC to be changed via buttons
-  attachInterrupt(1,CDC_up,LOW);
+//  attachInterrupt(0,CDC_down,LOW);  // allow CDC to be changed via buttons
+//  attachInterrupt(1,CDC_up,LOW);
   pinMode(datalog_pin, INPUT);
   
   tft.begin();
   tft.fillScreen(COLOR_BACKGROUND);
   tft.setRotation(1);
-  //bmpDraw("ele.BMP", 213, 5);  // memory issues if too large
+  bmpDraw("ele.BMP", 213, 5);  // memory issues if too large
   tft.drawRect(2, 5, 205, 170, COLOR_RECT);
   
   
@@ -103,9 +93,26 @@ void loop()
     CDC_down_flag = false;
   }
   
+  // check to see if datalog button has been triggered
+  if (LOG_DATA){
+    datalog_state = analogRead(datalog_pin)>900;
+    
+    if (datalog_state != datalog_flag){  // if button has been pressed
+      datalog_flag = datalog_state;
+      if (datalog_flag)
+        newfile();  // start new file
+      else{
+        dataFile.close();  // close file
+        tft.setCursor(20, 200);
+        tft.setTextColor(COLOR_TEXT2,COLOR_BACKGROUND);  
+        tft.setTextSize(2);
+        tft.print(F("data logging stopped  "));
+      }
+    }
+  }
+  
   unsigned int ELEdata[3];	// array to store filtered data for the 3 electrodes
   double Capdata[3];	// array to store capacitance values
-  //Serial.println("Fetching Data");
   Vin_value = 5.0*analogRead(Vin_pin)/1024.0;
   //Serial.println(Vin_value,3);
   MPR03X_readELEdata(1, 3, ELEdata);	// read and store data from all 3 electrodes of Dev1 into ELEdata
@@ -118,25 +125,38 @@ void loop()
     delay(5);	// delay to ensure fresh data
   }
   
-  // Output data to display
+  // Output data
+//  Serial.print("ELE0 = ");
+//  Serial.print(ELEdata[0]);
+//  Serial.print(", ELE1 = ");
+//  Serial.print(ELEdata[1]);
+//  Serial.print(", ELE2 = ");
+//  Serial.print(ELEdata[2]);
+//  Serial.print(" Cap0 = ");
+//  Serial.print(Capdata[0],3);
+//  Serial.print(", Cap1 = ");
+//  Serial.print(Capdata[1],3);
+//  Serial.print(F(", Cap2 = "));
+//  Serial.println(Capdata[2],3);
+
   if (!datalog_flag){  // suppress screen when logging to increase loop rate
     tft.setCursor(0, 20);
     tft.setTextColor(COLOR_TEXT1,COLOR_BACKGROUND);  
     tft.setTextSize(2);
-    tft.print(F(" ELE0= "));
+    tft.print(F(" ELE0 = "));
     tft.println(ELEdata[0]);
-    tft.print(F(" ELE1= "));
+    tft.print(F(" ELE1 = "));
     tft.println(ELEdata[1]);
-    tft.print(F(" ELE2= "));
+    tft.print(F(" ELE2 = "));
     tft.println(ELEdata[2]);
     tft.println();
-    tft.print(F(" Cap0= "));
+    tft.print(F(" Cap0 = "));
     tft.print(Capdata[0],2);
     tft.println(F(" pF "));
-    tft.print(F(" Cap1= "));
+    tft.print(F(" Cap1 = "));
     tft.print(Capdata[1],2);
     tft.println(F(" pF "));
-    tft.print(F(" Cap2= "));
+    tft.print(F(" Cap2 = "));
     tft.print(Capdata[2],2);
     tft.println(F(" pF "));
     tft.println();
@@ -155,28 +175,6 @@ void loop()
 //*****************************************************************************//
 //*****************************************************************************//
 
-void datalog_int() {
-  delay(100);  // wait to debounce
-//  latest_interrupted_pin=PCintPort::arduinoPin;  // reads which pin triggered the int
-  boolean pinstate = PCintPort::pinState;  // read the current state (HIGH/LOW)
-  Serial.println(pinstate);
-  if (pinstate == datalog_flag)
-    return;  // exit if falsely detected change 
-    
-  datalog_flag = pinstate;
-  if (datalog_flag)
-    newfile();  // start new file
-  else{
-    dataFile.close();  // close file
-    tft.setCursor(20, 200);
-    tft.setTextColor(COLOR_TEXT2,COLOR_BACKGROUND);  
-    tft.setTextSize(2);
-    tft.print(F("data logging stopped  "));
-   }
-}
-
-//*****************************************************************************//  
-  
 void CDC_down()
 {
   CDC_down_flag = true;

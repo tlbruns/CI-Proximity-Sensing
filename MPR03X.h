@@ -40,8 +40,8 @@
 #define filter_config	0x43
 #define	ELE_config		0x44
 
-void MPR03X_init(int device, int CDC, int CDT);
-void MPR03X_readELEdata(int device, int num_ELE, unsigned int *ELEdata);
-void MPR03X_convtoCap(unsigned int *ELEdata, double *Capdata, int CDC, int CDT, double Vin_value);
+void MPR03X_init(byte device, byte CDC, byte CDT);
+void MPR03X_readELEdata(byte device, byte num_ELE, unsigned int *ELEdata);
+void MPR03X_convtoCap(unsigned int *ELEdata, double *Capdata, byte CDC, byte CDT, double Vin_value);
 
 #endif
