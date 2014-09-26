@@ -1,6 +1,6 @@
 // Uses MPR03X to read capacitance values and displays them on a TFT screen
 // Trevor Bruns
-// Last Revised: July 28 2014 (Ver 2.3)
+// Last Revised: July 29 2014 (Ver 2.4)
 
 #include <Wire.h>    // I2C library
 #include "MPR03X.h"  // Cap Sensing IC library
@@ -37,13 +37,10 @@ boolean datalog_state = false; // current state of datalogging
 const byte Vin_pin = A3;  // voltage monitor to ensure accurate capacitance calculations
 double Vin_value = 0;
 
-byte CDC = 10; // Charge/Discharge Current (uA)
+byte CDC = 12; // Charge/Discharge Current (uA)
 byte CDT = 3; // Charge/Discharge Time (1->0.5us, 2->1us, ..., 7->32us)
 volatile boolean CDC_up_flag = false;
 volatile boolean CDC_down_flag = false;
-
-const byte LEDred_pin = 6;
-const byte LEDgreen_pin = 5;
 
 // set up variables for SD card data logging
 File dataFile;
@@ -55,18 +52,15 @@ void setup()
   if(LOG_DATA){
 //    Serial.print("Initializing SD card...");
     if (!SD.begin(SD_CS)) {
-      Serial.println("failed!");
+//      Serial.println(F("failed!"));
       return;
     }
-//    Serial.println("card initialized");
+    Serial.println(F("card initialized"));
   }
   
-  attachInterrupt(0,CDC_down,LOW);  // allow CDC to be changed via buttons
-  attachInterrupt(1,CDC_up,LOW);
+//  attachInterrupt(0,CDC_down,LOW);  // allow CDC to be changed via buttons
+//  attachInterrupt(1,CDC_up,LOW);
   pinMode(datalog_pin, INPUT);
-  
-  pinMode(LEDred_pin, OUTPUT);
-  pinMode(LEDgreen_pin, OUTPUT);
   
   tft.begin();
   tft.fillScreen(COLOR_BACKGROUND);
@@ -87,7 +81,7 @@ void setup()
   tft.print(F("ELE1 ="));
   tft.setCursor(10, 52);
   tft.print(F("ELE2 ="));
-   tft.setCursor(10, 84);
+  tft.setCursor(10, 84);
   tft.print(F("Cap0 ="));
   tft.setCursor(10, 100);
   tft.print(F("Cap1 ="));
@@ -111,7 +105,7 @@ void setup()
   tft.setCursor(10,230);
   tft.setTextSize(1);
   tft.setTextColor(COLOR_TEXT1,COLOR_BACKGROUND);
-  tft.print(F("Version 2.3"));
+  tft.print(F("Version 2.4"));
 
 }
 	
@@ -172,10 +166,7 @@ void loop()
     datalog(Capdata);
     delay(5);	// delay to ensure fresh data
   }
-  
-  analogWrite(LEDred_pin,ELEdata[0]/4);
-  analogWrite(LEDgreen_pin,ELEdata[2]/3); // compensate for green being brighter than red
-  
+    
   if (!datalog_flag){  // suppress screen when logging to increase loop rate
     tft.setCursor(90, 20);
     tft.setTextColor(COLOR_TEXT1,COLOR_BACKGROUND);  
