@@ -19,8 +19,8 @@
 #define COLOR_TEXT4      0XFCC0
 #define COLOR_RECT       ILI9340_WHITE
 
-const char TFT_RST = 15;
-const char TFT_DC = 19;
+const char TFT_RST = 14;
+const char TFT_DC = 20;
 const char TFT_CS = 10;
 const char SD_CS = 9;
 
@@ -34,12 +34,20 @@ volatile boolean datalog_state = false; // current state of datalogging
 // set up variables for SD card data logging
 File dataFile;
 
-const byte numtouchPins = 3;
-const int touchPin[numtouchPins] = {0,1,18};
+const byte numtouchPins = 6;
+const int touchPin[numtouchPins] = {0,1,18,19,22,23};
 unsigned int ELEdata[numtouchPins]; // array to store raw data from ADC
 double Capdata[numtouchPins];	    // array to store capacitance values
 
+int cur_pos = 0;  // current X position of the electrode array
+const int pos_increment = 2;  // amount to inc/dec each button press (in 1/1000s of an inch)
+const byte button_pos_inc = 6;  // pin # for button to increase current electrode position
+const byte button_pos_dec = 5;
+volatile boolean inc_pos_flag;
+volatile boolean dec_pos_flag;
+
 double loop_time = 0;
+byte loop_counter = 0;
 
 void setup()
 {
@@ -48,42 +56,45 @@ void setup()
   tft.begin();
   tft.fillScreen(COLOR_BACKGROUND);
   tft.setRotation(1);
-  tft.drawRect(2, 5, 210, 170, COLOR_RECT);  
+//  tft.drawRect(2, 5, 205, 170, COLOR_RECT);  
 
   // print static text to the screen
-  tft.setCursor(10, 20);
-  tft.setTextColor(COLOR_TEXT1,COLOR_BACKGROUND);  
+  tft.setTextColor(COLOR_TEXT2,COLOR_BACKGROUND);
   tft.setTextSize(2);
-  tft.print(F("ELE0 ="));
-  tft.setCursor(10, 36);
-  tft.print(F("ELE1 ="));
-  tft.setCursor(10, 52);
-  tft.print(F("ELE2 ="));
-  tft.setCursor(10, 84);
-  tft.print(F("Cap0 ="));
-  tft.setCursor(10, 100);
-  tft.print(F("Cap1 ="));
-  tft.setCursor(10, 116);
-  tft.print(F("Cap2 ="));
-  tft.setCursor(10, 148);
+  tft.setCursor(5, 15);
+  tft.print(F("Position"));
+  tft.setCursor(105,15);
+  tft.print(F("="));
   
-  tft.setCursor(222,10);
-  tft.setTextSize(4);
-  tft.setTextColor(COLOR_TEXT3,COLOR_BACKGROUND);
-  tft.print(F("CAOS"));
+  tft.setTextColor(COLOR_TEXT1,COLOR_BACKGROUND);  
+  for(byte i=0; i<numtouchPins; i++){
+    tft.setCursor(5, 50+i*16);
+    tft.print(F("Cap"));
+    tft.print(touchPin[i]);
+    tft.setCursor(70, 50+i*16);
+    tft.print(F("="));
+    }
   
   tft.setTextColor(COLOR_TEXT2,COLOR_BACKGROUND);
-  tft.setCursor(235,45);
+  tft.setCursor(220,50);
   tft.setTextSize(1);
   tft.print(F("Trevor Bruns"));
   
   tft.setCursor(10,230);
   tft.setTextSize(1);
   tft.setTextColor(COLOR_TEXT1,COLOR_BACKGROUND);
-  tft.print(F("Version 3.0"));
+  tft.print(F("Version 3.1"));
 
   pinMode(datalog_pin,INPUT);
-  attachInterrupt(datalog_pin,int_datalog,CHANGE);
+  
+  if(LOG_DATA){
+    pinMode(button_pos_inc,INPUT);
+    pinMode(button_pos_dec,INPUT);
+    attachInterrupt(button_pos_inc,int_pos_inc, LOW);
+    attachInterrupt(button_pos_dec,int_pos_dec, LOW);
+  }
+  
+  attachInterrupt(datalog_pin,int_datalog, CHANGE);
   
   if(LOG_DATA){
     Serial.print(F("Initializing SD card..."));
@@ -96,7 +107,8 @@ void setup()
       delay(2000);
       return;
     }
-    bmpDraw("ele.BMP", 220, 55);
+    bmpDraw("ele.BMP", 220, 60);
+    bmpDraw("caos140.bmp",175,10);
     Serial.println(F("card initialized"));
   }
 }
@@ -104,6 +116,16 @@ void setup()
 void loop()
 {
   unsigned int loop_start_time = micros();
+  
+  // check if position has changed
+  if(inc_pos_flag){
+    cur_pos += pos_increment;
+    inc_pos_flag = false;
+  }
+  else if(dec_pos_flag){
+    cur_pos -= pos_increment;
+    dec_pos_flag = false;
+  }
   
   // read and store data from all electrodes into ELEdata
   for (byte i=0; i<numtouchPins; i++)
@@ -129,37 +151,26 @@ void loop()
     }
     
     // save data to SD card
-    if(datalog_flag){
+    if(datalog_flag)      
       datalog(Capdata);
-//      delay(5);  // allow for data to reshresh
+  }
+  
+  // suppress screen 7/8 loops when logging to increase speed
+  if(datalog_flag && loop_counter%5 != 0)
+    delay(20); // slow down to limit amount of data
+  else{
+    tft.setTextSize(2);
+    tft.setTextColor(COLOR_TEXT2, COLOR_BACKGROUND);
+    tft.setCursor(120,15);
+    tft.print(cur_pos);
+    tft.print("  "); // erases extra characters when number decreases
+    tft.setTextColor(COLOR_TEXT1,COLOR_BACKGROUND);  
+    for(byte i=0; i<numtouchPins; i++){
+      tft.setCursor(85, 50+i*16);
+      tft.print(Capdata[i],1);
+      tft.print(F(" pF "));
     }
   }
-  
-  tft.setTextColor(COLOR_TEXT1,COLOR_BACKGROUND);  
-  tft.setTextSize(2);
-  
-  if (!datalog_flag){  // suppress screen when logging to increase loop rate
-    tft.setCursor(90, 20);
-    tft.print(ELEdata[0]);
-    
-    tft.setCursor(90, 36);
-    tft.print(ELEdata[1]);
-    
-    tft.setCursor(90, 52);
-    tft.print(ELEdata[2]);
-  }
-    
-  tft.setCursor(90, 84);
-  tft.print(Capdata[0],2);
-  tft.print(F(" pF "));
-  
-  tft.setCursor(90, 100);
-  tft.print(Capdata[1],2);
-  tft.print(F(" pF "));
-  
-  tft.setCursor(90, 116);
-  tft.print(Capdata[2],2);
-  tft.print(F(" pF "));
 
   tft.setCursor(260,230);
   tft.setTextColor(COLOR_TEXT1,COLOR_BACKGROUND);
@@ -167,6 +178,7 @@ void loop()
   loop_time = (micros()-loop_start_time)/1000.0;
   tft.print(loop_time,2);
   tft.print(F(" ms   "));
+  loop_counter++;
 }
 
 //*****************************************************************************//
@@ -191,7 +203,7 @@ void newfile()
         dataString += String(touchPin[i]);
         dataString += ","; // for CSV file
         if (i == (numtouchPins-1))  
-          dataString += "Loop Time";  
+          dataString += "Position, Loop Time";  
       }
       // if the file is available, write to it:
       if (dataFile)
@@ -212,12 +224,34 @@ void newfile()
 //*****************************************************************************//
 void int_datalog()
 {
-  static unsigned long last_interrupt_time = 0;
+  static unsigned long last_int_datalog = 0;
   unsigned long interrupt_time = millis();
   // If interrupts come faster than 100ms, assume it's a bounce and ignore
-  if (interrupt_time - last_interrupt_time > 100) 
+  if (interrupt_time - last_int_datalog > 100) 
     datalog_state = digitalRead(datalog_pin);
-  last_interrupt_time = interrupt_time;
+  last_int_datalog = interrupt_time;
+}
+
+//*****************************************************************************//
+void int_pos_inc()
+{
+  static unsigned long last_int_pos_inc = 0;
+  unsigned long interrupt_time = millis();
+  // If interrupts come faster than 300ms, assume it's a bounce and ignore
+  if (interrupt_time - last_int_pos_inc > 80) 
+    inc_pos_flag = true;
+  last_int_pos_inc = interrupt_time;
+}
+
+//*****************************************************************************//
+void int_pos_dec()
+{
+  static unsigned long last_int_pos_dec = 0;
+  unsigned long interrupt_time = millis();
+  // If interrupts come faster than 300ms, assume it's a bounce and ignore
+  if (interrupt_time - last_int_pos_dec > 80) 
+    dec_pos_flag = true;
+  last_int_pos_dec = interrupt_time;
 }
 
 //*****************************************************************************//
@@ -233,7 +267,10 @@ void datalog(double *Capdata)
     dtostrf(Capdata[i],5,2,cbuf); // converts from double to char
     dataString += cbuf;
     dataString += ","; // for CSV file
-    if (i == (numtouchPins-1)){  // log loop time as last entry
+    if (i == (numtouchPins-1)){  // log position and loop time as last entries
+      itoa(cur_pos,cbuf,10);
+      dataString += cbuf;
+      dataString += ",";
       dtostrf(loop_time,5,2,cbuf);
       dataString += cbuf;
     }
