@@ -1,11 +1,12 @@
 // Uses Teensy 3.1 to read capacitance values and display them on a TFT screen
 // Trevor Bruns
-// Last Revised: Sep 18 2014 (Ver 3.4)
+// Last Revised: Sep 25 2014 (Ver 3.5)
 
 #include <Adafruit_GFX.h>    // Core graphics library
 #include <ILI9341_t3.h> // Hardware-specific library
 #include <SPI.h>
 #include <SD.h>    // SD card library
+#include <Digimatic.h>  // Read data from Mitutoyo calipers
 
 #define CPU_RESTART_ADDR (uint32_t *)0xE000ED0C
 #define CPU_RESTART_VAL 0x5FA0004
@@ -51,7 +52,7 @@ int bias_samples = 100; // number of samples to average
 int bias_count = 0;  // counts loops for bias function
 boolean bias_set = false;
 
-int cur_pos = 0;  // current X position of the electrode array
+double cur_pos = 0.0;  // current X position of the electrode array
 const int pos_increment = 2;  // amount to inc/dec each button press (in 1/1000s of an inch)
 const byte button_pos_inc = 26;  // pin # for momentary buttons
 const byte button_pos_dec = 24;
@@ -63,6 +64,12 @@ volatile boolean bias_flag = false;
 
 const byte BatteryMonitor_pin = 7; // Analog input pin for battery monitoring (digital pin 21)
 
+// define pins for Digimatic
+uint8_t req_pin = 27; //mic REQ line goes to pin 5 through q1 (arduino high pulls request line low)
+uint8_t data_pin = 30; //mic Data line goes to pin 2
+uint8_t clk_pin = 31; //mic Clock line goes to pin 3
+// initialize Digimatic
+Digimatic caliper = Digimatic(clk_pin, data_pin, req_pin);
 
 double loop_time = 0;
 byte loop_counter = 0;
@@ -105,7 +112,7 @@ void setup()
   tft.setCursor(10,230);
   tft.setTextSize(1);
   tft.setTextColor(COLOR_TEXT2,COLOR_BACKGROUND);
-  tft.print(F("Version 3.4"));
+  tft.print(F("Version 3.5"));
 
   pinMode(datalog_pin,INPUT);
   
@@ -114,8 +121,8 @@ void setup()
     pinMode(button_pos_dec,INPUT);
     pinMode(button_bias,INPUT);
     pinMode(button_restart,INPUT);
-    attachInterrupt(button_pos_inc,int_pos_inc, LOW);
-    attachInterrupt(button_pos_dec,int_pos_dec, LOW);
+//    attachInterrupt(button_pos_inc,int_pos_inc, LOW);
+//    attachInterrupt(button_pos_dec,int_pos_dec, LOW);
     attachInterrupt(button_bias,int_bias, LOW);
     attachInterrupt(button_restart,int_restart, LOW);
   }
@@ -147,15 +154,9 @@ void loop()
   if(!loop_counter%100)  // check every 100 loops (~2.5 seconds)
     checkbattery(BatteryMonitor_pin);
   
-  // check if position has changed
-  if(inc_pos_flag){
-    cur_pos += pos_increment;
-    inc_pos_flag = false;
-  }
-  else if(dec_pos_flag){
-    cur_pos -= pos_increment;
-    dec_pos_flag = false;
-  }
+  // request position measurement
+  if(!loop_counter%5)  // check every 5 loops (~125ms seconds)
+    cur_pos = caliper.fetch();
   
   // read and store data from all electrodes into ELEdata
   for (byte i=0; i<numtouchPins; i++)
@@ -174,7 +175,7 @@ void loop()
   if(bias_set){
     for (int i = 0; i < numtouchPins; i++){
       Capdata[i] = Capdata[i] - bias[i];
-      if (Capdata[i]<0) Capdata[i]=0;
+//      if (Capdata[i]<0) Capdata[i]=0;
     }
   }
   	
@@ -312,15 +313,19 @@ void bias_function()
     tft.print(F("biasing..."));
     bias_count++;
     return;
+  }    
+  else if(bias_count<10)  // delay to allow finger to be removed from button
+  {
+    bias_count++;
+    return;
   }
-  
+    
   bias_count++;
-  
   // sum Capdata values for averaging
   for (int i = 0; i < numtouchPins; i++)
     bias[i] = bias[i] + Capdata[i];
     
-  if(bias_count == bias_samples+1){
+  if(bias_count == bias_samples+11){
     for (int i = 0; i < numtouchPins; i++)
       bias[i] = bias[i]/(double)(bias_samples);
       
@@ -417,7 +422,7 @@ void datalog(double *Capdata)
     dataString += cbuf;
     dataString += ","; // for CSV file
     if (i == (numtouchPins-1)){  // log position and loop time as last entries
-      itoa(cur_pos,cbuf,10);
+      dtostrf(cur_pos,6,caliper.decimal_places(),cbuf);
       dataString += cbuf;
       dataString += ",";
       dtostrf(loop_time,5,2,cbuf);
