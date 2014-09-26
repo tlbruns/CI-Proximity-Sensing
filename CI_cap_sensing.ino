@@ -1,11 +1,15 @@
 // Uses Teensy 3.1 to read capacitance values and display them on a TFT screen
 // Trevor Bruns
-// Last Revised: Aug 14 2014 (Ver 3.3)
+// Last Revised: Sep 18 2014 (Ver 3.4)
 
 #include <Adafruit_GFX.h>    // Core graphics library
 #include <ILI9341_t3.h> // Hardware-specific library
 #include <SPI.h>
 #include <SD.h>    // SD card library
+
+#define CPU_RESTART_ADDR (uint32_t *)0xE000ED0C
+#define CPU_RESTART_VAL 0x5FA0004
+#define CPU_RESTART (*CPU_RESTART_ADDR = CPU_RESTART_VAL);
 
 #if defined(__SAM3X8E__)
     #undef __FlashStringHelper::F(string_literal)
@@ -37,16 +41,28 @@ volatile boolean datalog_state = false; // current state of datalogging
 File dataFile;
 
 const byte numtouchPins = 10;
+//const int touchPin[numtouchPins] = {0,1,15};
 const int touchPin[numtouchPins] = {0,1,15,16,17,18,19,22,23,25};
 unsigned int ELEdata[numtouchPins]; // array to store raw data from ADC
 double Capdata[numtouchPins];	    // array to store capacitance values
+double bias[numtouchPins];  // stores bias value for each electrode
+double TSI_count2cap = 53.33; // scaling from raw count register to capacitance in pF (division)
+int bias_samples = 100; // number of samples to average
+int bias_count = 0;  // counts loops for bias function
+boolean bias_set = false;
 
 int cur_pos = 0;  // current X position of the electrode array
 const int pos_increment = 2;  // amount to inc/dec each button press (in 1/1000s of an inch)
-const byte button_pos_inc = 6;  // pin # for button to increase current electrode position
-const byte button_pos_dec = 5;
-volatile boolean inc_pos_flag;
-volatile boolean dec_pos_flag;
+const byte button_pos_inc = 26;  // pin # for momentary buttons
+const byte button_pos_dec = 24;
+const byte button_bias = 29;
+const byte button_restart = 28; // unused; sticks a little
+volatile boolean inc_pos_flag = false;
+volatile boolean dec_pos_flag = false;
+volatile boolean bias_flag = false;
+
+const byte BatteryMonitor_pin = 7; // Analog input pin for battery monitoring (digital pin 21)
+
 
 double loop_time = 0;
 byte loop_counter = 0;
@@ -54,6 +70,11 @@ byte loop_counter = 0;
 void setup()
 {
   Serial.begin(115200);	// start serial communication, NOTE: full USB speed (12 Mbit/s)
+  
+  // setup ADC for monitoring battery voltage
+  analogReference(INTERNAL); // use 1.2V interal reference (less noise)
+  analogReadAveraging(32);   // average 32 samples
+  analogReadRes(12);         // 12 bit resolution, 0-4095
   
   tft.begin();
   tft.fillScreen(COLOR_BACKGROUND);
@@ -77,23 +98,27 @@ void setup()
     }
   
   tft.setTextColor(COLOR_TEXT2,COLOR_BACKGROUND);
-  tft.setCursor(40,37);
+  tft.setCursor(40,36);
   tft.setTextSize(1);
   tft.print(F("Trevor Bruns"));
   
   tft.setCursor(10,230);
   tft.setTextSize(1);
-  tft.setTextColor(COLOR_TEXT1,COLOR_BACKGROUND);
-  tft.print(F("Version 3.3"));
+  tft.setTextColor(COLOR_TEXT2,COLOR_BACKGROUND);
+  tft.print(F("Version 3.4"));
 
   pinMode(datalog_pin,INPUT);
   
-//  if(LOG_DATA){
-//    pinMode(button_pos_inc,INPUT);
-//    pinMode(button_pos_dec,INPUT);
-//    attachInterrupt(button_pos_inc,int_pos_inc, LOW);
-//    attachInterrupt(button_pos_dec,int_pos_dec, LOW);
-//  }
+  if(LOG_DATA){
+    pinMode(button_pos_inc,INPUT);
+    pinMode(button_pos_dec,INPUT);
+    pinMode(button_bias,INPUT);
+    pinMode(button_restart,INPUT);
+    attachInterrupt(button_pos_inc,int_pos_inc, LOW);
+    attachInterrupt(button_pos_dec,int_pos_dec, LOW);
+    attachInterrupt(button_bias,int_bias, LOW);
+    attachInterrupt(button_restart,int_restart, LOW);
+  }
   
   attachInterrupt(datalog_pin,int_datalog, CHANGE);
   
@@ -113,10 +138,14 @@ void setup()
     Serial.println(F("card initialized"));
   }
 }
+//*****************************************************************************//
 	
 void loop()
 {
   unsigned int loop_start_time = micros();
+  
+  if(!loop_counter%100)  // check every 100 loops (~2.5 seconds)
+    checkbattery(BatteryMonitor_pin);
   
   // check if position has changed
   if(inc_pos_flag){
@@ -134,7 +163,20 @@ void loop()
     
   // convert to capacitance values (pF)
   for (byte i=0; i<numtouchPins; i++)
-    Capdata[i] = ELEdata[i]/50.0;
+    Capdata[i] = ELEdata[i]/TSI_count2cap;
+    
+  // check if biasing active
+  if(bias_flag){
+    bias_function();
+  }
+    
+  // apply bias
+  if(bias_set){
+    for (int i = 0; i < numtouchPins; i++){
+      Capdata[i] = Capdata[i] - bias[i];
+      if (Capdata[i]<0) Capdata[i]=0;
+    }
+  }
   	
   if (LOG_DATA){
     if (datalog_state != datalog_flag){  // only do something if state is different than before
@@ -177,7 +219,7 @@ void loop()
   
 
   tft.setCursor(260,230);
-  tft.setTextColor(COLOR_TEXT1,COLOR_BACKGROUND);
+  tft.setTextColor(COLOR_TEXT2,COLOR_BACKGROUND);
   tft.setTextSize(1);
   loop_time = (micros()-loop_start_time)/1000.0;
   tft.print(loop_time,2);
@@ -185,6 +227,7 @@ void loop()
   loop_counter++;
 }
 
+//*****************************************************************************//
 //*****************************************************************************//
 //*****************************************************************************//
 
@@ -210,7 +253,26 @@ void newfile()
       // if the file is available, write to it:
       if (dataFile)
         dataFile.println(dataString);
-    
+        
+      // if bias has been set, write bias values as first row of data
+      if(bias_set){
+        dataString = "";
+        for (byte i = 0; i < numtouchPins; i++) {
+          char cbuf[10]; // temporary buffer to store double
+          dtostrf(bias[i],5,2,cbuf); // converts from double to char
+          dataString += cbuf;
+          dataString += ","; // for CSV file
+          if (i == (numtouchPins-1)){
+            itoa(0,cbuf,10);
+            dataString += cbuf;
+            dataString += ",";
+            dtostrf(0.0,5,2,cbuf);
+            dataString += cbuf;
+          }
+        }
+        if (dataFile)
+          dataFile.println(dataString);
+      }
     
       // Output status to TFT
       tft.setCursor(20, 210);
@@ -224,12 +286,61 @@ void newfile()
 }
 
 //*****************************************************************************//
+void checkbattery(byte batt_pin)
+{
+  double voltage = analogRead(batt_pin)*4.4807/4096.0; // based on R1 = 21770, R2 = 7963 (3291+4672)
+  tft.setCursor(150,230);
+  tft.setTextSize(1);
+  tft.setTextColor(COLOR_TEXT2,COLOR_BACKGROUND);
+  tft.print(F("Battery = "));
+  tft.print(voltage,3);
+  tft.print("V");
+}
+
+//*****************************************************************************//
+void bias_function()
+{  
+  if(bias_count == 0){  
+    // reset bias values
+    bias_set = false;
+    for (int i = 0; i < numtouchPins; i++){
+      bias[i] = 0.0;
+    }
+    tft.setCursor(20, 210);
+    tft.setTextColor(COLOR_TEXT4,COLOR_BACKGROUND);  
+    tft.setTextSize(2);
+    tft.print(F("biasing..."));
+    bias_count++;
+    return;
+  }
+  
+  bias_count++;
+  
+  // sum Capdata values for averaging
+  for (int i = 0; i < numtouchPins; i++)
+    bias[i] = bias[i] + Capdata[i];
+    
+  if(bias_count == bias_samples+1){
+    for (int i = 0; i < numtouchPins; i++)
+      bias[i] = bias[i]/(double)(bias_samples);
+      
+    tft.setCursor(20, 210);
+    tft.setTextSize(2);
+    tft.print(F("          "));
+    bias_set = true;
+    bias_flag = false;
+    bias_count = 0;
+  }
+  
+}
+
+//*****************************************************************************//
 void int_datalog()
 {
   static unsigned long last_int_datalog = 0;
   unsigned long interrupt_time = millis();
-  // If interrupts come faster than 100ms, assume it's a bounce and ignore
-  if (interrupt_time - last_int_datalog > 100) 
+  // If interrupts come faster than 500ms, assume it's a bounce and ignore
+  if (interrupt_time - last_int_datalog > 500) 
     datalog_state = digitalRead(datalog_pin);
   last_int_datalog = interrupt_time;
 }
@@ -239,7 +350,7 @@ void int_pos_inc()
 {
   static unsigned long last_int_pos_inc = 0;
   unsigned long interrupt_time = millis();
-  // If interrupts come faster than 300ms, assume it's a bounce and ignore
+  // If interrupts come faster than 80ms, assume it's a bounce and ignore
   if (interrupt_time - last_int_pos_inc > 80) 
     inc_pos_flag = true;
   last_int_pos_inc = interrupt_time;
@@ -250,10 +361,32 @@ void int_pos_dec()
 {
   static unsigned long last_int_pos_dec = 0;
   unsigned long interrupt_time = millis();
-  // If interrupts come faster than 300ms, assume it's a bounce and ignore
+  // If interrupts come faster than 80ms, assume it's a bounce and ignore
   if (interrupt_time - last_int_pos_dec > 80) 
     dec_pos_flag = true;
   last_int_pos_dec = interrupt_time;
+}
+
+//*****************************************************************************//
+void int_bias()
+{
+  static unsigned long last_int_bias = 0;
+  unsigned long interrupt_time = millis();
+  // If interrupts come faster than 80ms, assume it's a bounce and ignore
+  if (interrupt_time - last_int_bias > 80) 
+    bias_flag = true;
+  last_int_bias = interrupt_time;
+}
+
+//*****************************************************************************//
+void int_restart()
+{
+  static unsigned long last_int_restart = 0;
+  unsigned long interrupt_time = millis();
+  // If interrupts come faster than 80ms, assume it's a bounce and ignore
+  if (interrupt_time - last_int_restart > 80)
+    CPU_RESTART; 
+  last_int_restart = interrupt_time;
 }
 
 //*****************************************************************************//
@@ -264,6 +397,7 @@ void draw_bargraph(int ELEnum, int value)
   int maxvalue = 140;  
   int graph_colors[9] = {ILI9341_BLUE,ILI9341_GRAY,ILI9341_GREEN,ILI9341_CYAN,ILI9341_MAGENTA,ILI9341_YELLOW,ILI9341_WHITE,ILI9341_RED,ILI9341_TEAL};
   if(value>maxvalue) value=maxvalue;
+  if(value<0) value = 0;
   int barwidth = 16;
   
   tft.fillRect(x0, y0+ELEnum*barwidth, value, barwidth, graph_colors[ELEnum]);
@@ -294,7 +428,6 @@ void datalog(double *Capdata)
   // if the file is available, write to it:
   if (dataFile) {
     dataFile.println(dataString);
-    //dataFile.close();
   }  
   // if the file isn't open, pop up an error:
   else {
