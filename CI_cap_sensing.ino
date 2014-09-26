@@ -1,9 +1,9 @@
 // Uses Teensy 3.1 to read capacitance values and display them on a TFT screen
 // Trevor Bruns
-// Last Revised: Aug 5 2014 (Ver 3.1)
+// Last Revised: Aug 14 2014 (Ver 3.3)
 
 #include <Adafruit_GFX.h>    // Core graphics library
-#include <Adafruit_ILI9340.h> // Hardware-specific library
+#include <ILI9341_t3.h> // Hardware-specific library
 #include <SPI.h>
 #include <SD.h>    // SD card library
 
@@ -25,7 +25,8 @@ const char TFT_DC = 20;
 const char TFT_CS = 10;
 const char SD_CS = 9;
 
-Adafruit_ILI9340 tft = Adafruit_ILI9340(TFT_CS, TFT_DC, TFT_RST);
+//Adafruit_ILI9340 tft = Adafruit_ILI9340(TFT_CS, TFT_DC, TFT_RST);
+ILI9341_t3 tft = ILI9341_t3(TFT_CS, TFT_DC, TFT_RST);
 
 const boolean LOG_DATA = true; // set true to enable datalogging
 const byte datalog_pin = 4; // button to start/stop datalogging
@@ -35,8 +36,8 @@ volatile boolean datalog_state = false; // current state of datalogging
 // set up variables for SD card data logging
 File dataFile;
 
-const byte numtouchPins = 9;
-const int touchPin[numtouchPins] = {0,1,15,16,17,18,19,22,23};
+const byte numtouchPins = 10;
+const int touchPin[numtouchPins] = {0,1,15,16,17,18,19,22,23,25};
 unsigned int ELEdata[numtouchPins]; // array to store raw data from ADC
 double Capdata[numtouchPins];	    // array to store capacitance values
 
@@ -56,15 +57,14 @@ void setup()
   
   tft.begin();
   tft.fillScreen(COLOR_BACKGROUND);
-  tft.setRotation(1);
-//  tft.drawRect(2, 5, 205, 170, COLOR_RECT);  
+  tft.setRotation(1);  
 
   // print static text to the screen
   tft.setTextColor(COLOR_TEXT2,COLOR_BACKGROUND);
   tft.setTextSize(2);
-  tft.setCursor(5, 15);
+  tft.setCursor(180, 15);
   tft.print(F("Position"));
-  tft.setCursor(105,15);
+  tft.setCursor(280,15);
   tft.print(F("="));
   
   tft.setTextColor(COLOR_TEXT1,COLOR_BACKGROUND);  
@@ -77,23 +77,23 @@ void setup()
     }
   
   tft.setTextColor(COLOR_TEXT2,COLOR_BACKGROUND);
-  tft.setCursor(220,50);
+  tft.setCursor(40,37);
   tft.setTextSize(1);
   tft.print(F("Trevor Bruns"));
   
   tft.setCursor(10,230);
   tft.setTextSize(1);
   tft.setTextColor(COLOR_TEXT1,COLOR_BACKGROUND);
-  tft.print(F("Version 3.1"));
+  tft.print(F("Version 3.3"));
 
   pinMode(datalog_pin,INPUT);
   
-  if(LOG_DATA){
-    pinMode(button_pos_inc,INPUT);
-    pinMode(button_pos_dec,INPUT);
-    attachInterrupt(button_pos_inc,int_pos_inc, LOW);
-    attachInterrupt(button_pos_dec,int_pos_dec, LOW);
-  }
+//  if(LOG_DATA){
+//    pinMode(button_pos_inc,INPUT);
+//    pinMode(button_pos_dec,INPUT);
+//    attachInterrupt(button_pos_inc,int_pos_inc, LOW);
+//    attachInterrupt(button_pos_dec,int_pos_dec, LOW);
+//  }
   
   attachInterrupt(datalog_pin,int_datalog, CHANGE);
   
@@ -108,8 +108,8 @@ void setup()
       delay(2000);
       return;
     }
-    bmpDraw("ele.BMP", 220, 60);
-    bmpDraw("caos140.bmp",175,10);
+//    bmpDraw("ele.BMP", 220, 60);
+    bmpDraw("caos140.bmp",5,2);
     Serial.println(F("card initialized"));
   }
 }
@@ -144,7 +144,7 @@ void loop()
         newfile();  // start new file
       else{
         dataFile.close();  // close file
-        tft.setCursor(20, 205);
+        tft.setCursor(20, 210);
         tft.setTextColor(COLOR_TEXT4,COLOR_BACKGROUND);  
         tft.setTextSize(2);
         tft.print(F("data logging stopped  "));
@@ -159,23 +159,22 @@ void loop()
         loop_counter=0; 
       }    
     }
-  
-  // suppress screen 7/8 loops when logging to increase speed
-  if(datalog_flag && loop_counter%8 != 0)
-    delay(20); // slow down to limit amount of data
-  else{
-    tft.setTextSize(2);
-    tft.setTextColor(COLOR_TEXT2, COLOR_BACKGROUND);
-    tft.setCursor(120,15);
-    tft.print(cur_pos);
-    tft.print("  "); // erases extra characters when number decreases
-    tft.setTextColor(COLOR_TEXT1,COLOR_BACKGROUND);  
-    for(byte i=0; i<numtouchPins; i++){
-      tft.setCursor(85, 50+i*16);
-      tft.print(Capdata[i],1);
-      tft.print(F(" pF "));
-    }
   }
+  
+  tft.setTextSize(2);
+  tft.setTextColor(COLOR_TEXT2, COLOR_BACKGROUND);
+  tft.setCursor(295,15);
+  tft.print(cur_pos);
+  tft.print("  "); // erases extra characters when number decreases
+  tft.setTextColor(COLOR_TEXT1,COLOR_BACKGROUND);  
+  for(byte i=0; i<numtouchPins; i++){
+    tft.setCursor(85, 50+i*16);
+    tft.print(Capdata[i],1);
+    tft.print(F(" pF "));
+    draw_bargraph(i,(int)Capdata[i]);
+  }
+  
+  
 
   tft.setCursor(260,230);
   tft.setTextColor(COLOR_TEXT1,COLOR_BACKGROUND);
@@ -184,7 +183,6 @@ void loop()
   tft.print(loop_time,2);
   tft.print(F(" ms   "));
   loop_counter++;
-  }
 }
 
 //*****************************************************************************//
@@ -215,7 +213,7 @@ void newfile()
     
     
       // Output status to TFT
-      tft.setCursor(20, 205);
+      tft.setCursor(20, 210);
       tft.setTextColor(COLOR_TEXT4,COLOR_BACKGROUND);  
       tft.setTextSize(2);
       tft.print(F("saving to ")); 
@@ -258,6 +256,19 @@ void int_pos_dec()
   last_int_pos_dec = interrupt_time;
 }
 
+//*****************************************************************************//
+void draw_bargraph(int ELEnum, int value)
+{
+  int x0 = 180;
+  int y0 = 50;
+  int maxvalue = 140;  
+  int graph_colors[9] = {ILI9341_BLUE,ILI9341_GRAY,ILI9341_GREEN,ILI9341_CYAN,ILI9341_MAGENTA,ILI9341_YELLOW,ILI9341_WHITE,ILI9341_RED,ILI9341_TEAL};
+  if(value>maxvalue) value=maxvalue;
+  int barwidth = 16;
+  
+  tft.fillRect(x0, y0+ELEnum*barwidth, value, barwidth, graph_colors[ELEnum]);
+  tft.fillRect(x0+value, y0+ELEnum*barwidth, maxvalue-value, barwidth, COLOR_BACKGROUND);
+}
 //*****************************************************************************//
 
 void datalog(double *Capdata)
@@ -405,7 +416,8 @@ void bmpDraw(char *filename, uint8_t x, uint8_t y) {
             b = sdbuffer[buffidx++];
             g = sdbuffer[buffidx++];
             r = sdbuffer[buffidx++];
-            tft.pushColor(tft.Color565(r,g,b));
+//            tft.pushColor(tft.Color565(r,g,b));
+            tft.pushColor(tft.color565(r,g,b));
           } // end pixel
         } // end scanline
         Serial.print("Loaded in ");
