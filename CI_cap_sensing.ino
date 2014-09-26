@@ -1,6 +1,6 @@
 // Uses MPR03X to read capacitance values and displays them on a TFT screen
 // Trevor Bruns
-// Last Revised: June 24 2014
+// Last Revised: July 28 2014 (Ver 2.3)
 
 #include <Wire.h>    // I2C library
 #include "MPR03X.h"  // Cap Sensing IC library
@@ -24,21 +24,26 @@
 #define COLOR_BACKGROUND 0x0000
 #define COLOR_TEXT1      ILI9340_GREEN
 #define COLOR_TEXT2      ILI9340_WHITE
-#define COLOR_RECT       ILI9340_BLUE
+#define COLOR_TEXT3      ILI9340_BLUE
+#define COLOR_TEXT4      0XFCC0
+#define COLOR_RECT       ILI9340_WHITE
 
 Adafruit_ILI9340 tft = Adafruit_ILI9340(TFT_CS, TFT_DC, TFT_RST);
 
-int datalog_pin = 0; // button to start/stop datalogging. NOTE: analog input
+const byte datalog_pin = A0; // button to start/stop datalogging
 boolean datalog_flag = false;  // start false, triggered true
 boolean datalog_state = false; // current state of datalogging
 
-int Vin_pin = A3;  // voltage monitor to ensure accurate capacitance calculations
+const byte Vin_pin = A3;  // voltage monitor to ensure accurate capacitance calculations
 double Vin_value = 0;
 
-int CDC = 10; // Charge/Discharge Current (uA)
-int CDT = 3; // Charge/Discharge Time (1->0.5us, 2->1us, ..., 7->32us)
+byte CDC = 10; // Charge/Discharge Current (uA)
+byte CDT = 3; // Charge/Discharge Time (1->0.5us, 2->1us, ..., 7->32us)
 volatile boolean CDC_up_flag = false;
 volatile boolean CDC_down_flag = false;
+
+const byte LEDred_pin = 6;
+const byte LEDgreen_pin = 5;
 
 // set up variables for SD card data logging
 File dataFile;
@@ -48,27 +53,66 @@ void setup()
   Serial.begin(115200);	// start serial communication
   
   if(LOG_DATA){
-    Serial.print(F("Initializing SD card..."));
+//    Serial.print("Initializing SD card...");
     if (!SD.begin(SD_CS)) {
-      Serial.println(F("failed!"));
+      Serial.println("failed!");
       return;
     }
-    Serial.println(F("card initialized"));
+//    Serial.println("card initialized");
   }
   
-//  attachInterrupt(0,CDC_down,LOW);  // allow CDC to be changed via buttons
-//  attachInterrupt(1,CDC_up,LOW);
+  attachInterrupt(0,CDC_down,LOW);  // allow CDC to be changed via buttons
+  attachInterrupt(1,CDC_up,LOW);
   pinMode(datalog_pin, INPUT);
+  
+  pinMode(LEDred_pin, OUTPUT);
+  pinMode(LEDgreen_pin, OUTPUT);
   
   tft.begin();
   tft.fillScreen(COLOR_BACKGROUND);
   tft.setRotation(1);
-  bmpDraw("ele.BMP", 213, 5);  // memory issues if too large
-  tft.drawRect(2, 5, 205, 170, COLOR_RECT);
+  bmpDraw("ele.BMP", 220, 55);  // memory issues if too large
+  tft.drawRect(2, 5, 210, 170, COLOR_RECT);
   
   
-  Serial.println(F("Capacitance Testing Started"));
+//  Serial.println(F("Capacitance Testing Started"));
   MPR03X_init(1,CDC,CDT); // started i2c comms and initialize MPR031 (see MPR03X.c for config params)  
+
+  // print static text to the screen
+  tft.setCursor(10, 20);
+  tft.setTextColor(COLOR_TEXT1,COLOR_BACKGROUND);  
+  tft.setTextSize(2);
+  tft.print(F("ELE0 ="));
+  tft.setCursor(10, 36);
+  tft.print(F("ELE1 ="));
+  tft.setCursor(10, 52);
+  tft.print(F("ELE2 ="));
+   tft.setCursor(10, 84);
+  tft.print(F("Cap0 ="));
+  tft.setCursor(10, 100);
+  tft.print(F("Cap1 ="));
+  tft.setCursor(10, 116);
+  tft.print(F("Cap2 ="));
+  tft.setCursor(10, 148);
+  tft.print(F("CDC = "));
+  tft.print(CDC);
+  tft.print(F("  "));
+  
+  tft.setCursor(222,10);
+  tft.setTextSize(4);
+  tft.setTextColor(COLOR_TEXT3,COLOR_BACKGROUND);
+  tft.print(F("CAOS"));
+  
+  tft.setTextColor(COLOR_TEXT2,COLOR_BACKGROUND);
+  tft.setCursor(235,45);
+  tft.setTextSize(1);
+  tft.print(F("Trevor Bruns"));
+  
+  tft.setCursor(10,230);
+  tft.setTextSize(1);
+  tft.setTextColor(COLOR_TEXT1,COLOR_BACKGROUND);
+  tft.print(F("Version 2.3"));
+
 }
 	
 void loop()
@@ -79,32 +123,36 @@ void loop()
   if (CDC_up_flag){
     CDC++;
     MPR03X_init(1,CDC,CDT); // re-initalize with new CDC value
-    Serial.print(F("CDC increased to "));
-    Serial.print(CDC);
-    Serial.println(F(" uA"));
+//    Serial.print(F("CDC increased to "));
+//    Serial.print(CDC);
+//    Serial.println(F(" uA"));
+    tft.setTextSize(2);
+    tft.setCursor(84, 148);
+    tft.print(CDC);
+    tft.print(F("  "));
     CDC_up_flag = false;
   }
   else if (CDC_down_flag){
     CDC--;
     MPR03X_init(1,CDC,CDT); // re-initalize with new CDC value
-    Serial.print(F("CDC decreased to "));
-    Serial.print(CDC);
-    Serial.println(F(" uA"));
+    tft.setTextSize(2);
+    tft.setCursor(84, 148);
+    tft.print(CDC);
+    tft.print(F("  "));
     CDC_down_flag = false;
   }
   
   // check to see if datalog button has been triggered
   if (LOG_DATA){
-    datalog_state = analogRead(datalog_pin)>900;
-    
+    datalog_state = digitalRead(datalog_pin);
     if (datalog_state != datalog_flag){  // if button has been pressed
       datalog_flag = datalog_state;
       if (datalog_flag)
         newfile();  // start new file
       else{
         dataFile.close();  // close file
-        tft.setCursor(20, 200);
-        tft.setTextColor(COLOR_TEXT2,COLOR_BACKGROUND);  
+        tft.setCursor(20, 195);
+        tft.setTextColor(COLOR_TEXT4,COLOR_BACKGROUND);  
         tft.setTextSize(2);
         tft.print(F("data logging stopped  "));
       }
@@ -115,9 +163,9 @@ void loop()
   double Capdata[3];	// array to store capacitance values
   Vin_value = 5.0*analogRead(Vin_pin)/1024.0;
   //Serial.println(Vin_value,3);
-  MPR03X_readELEdata(1, 3, ELEdata);	// read and store data from all 3 electrodes of Dev1 into ELEdata
+  MPR03X_readELEdata(1, 3, ELEdata); // read and store data from all 3 electrodes of Dev1 into ELEdata
   //Serial.println("Capacitance Testing Started");	
-  MPR03X_convtoCap(ELEdata, Capdata, CDC, CDT, Vin_value);	// convert ADC values to capacitance
+  MPR03X_convtoCap(ELEdata, Capdata, CDC, CDT, Vin_value); // convert ADC values to capacitance
 	
   // save data to SD card
   if(datalog_flag){
@@ -125,47 +173,36 @@ void loop()
     delay(5);	// delay to ensure fresh data
   }
   
-  // Output data
-//  Serial.print("ELE0 = ");
-//  Serial.print(ELEdata[0]);
-//  Serial.print(", ELE1 = ");
-//  Serial.print(ELEdata[1]);
-//  Serial.print(", ELE2 = ");
-//  Serial.print(ELEdata[2]);
-//  Serial.print(" Cap0 = ");
-//  Serial.print(Capdata[0],3);
-//  Serial.print(", Cap1 = ");
-//  Serial.print(Capdata[1],3);
-//  Serial.print(F(", Cap2 = "));
-//  Serial.println(Capdata[2],3);
-
+  analogWrite(LEDred_pin,ELEdata[0]/4);
+  analogWrite(LEDgreen_pin,ELEdata[2]/3); // compensate for green being brighter than red
+  
   if (!datalog_flag){  // suppress screen when logging to increase loop rate
-    tft.setCursor(0, 20);
+    tft.setCursor(90, 20);
     tft.setTextColor(COLOR_TEXT1,COLOR_BACKGROUND);  
     tft.setTextSize(2);
-    tft.print(F(" ELE0 = "));
-    tft.println(ELEdata[0]);
-    tft.print(F(" ELE1 = "));
-    tft.println(ELEdata[1]);
-    tft.print(F(" ELE2 = "));
-    tft.println(ELEdata[2]);
-    tft.println();
-    tft.print(F(" Cap0 = "));
+    tft.print(ELEdata[0]);
+    
+    tft.setCursor(90, 36);
+    tft.print(ELEdata[1]);
+    
+    tft.setCursor(90, 52);
+    tft.print(ELEdata[2]);
+    
+    tft.setCursor(90, 84);
     tft.print(Capdata[0],2);
-    tft.println(F(" pF "));
-    tft.print(F(" Cap1 = "));
+    tft.print(F(" pF "));
+    
+    tft.setCursor(90, 100);
     tft.print(Capdata[1],2);
-    tft.println(F(" pF "));
-    tft.print(F(" Cap2 = "));
+    tft.print(F(" pF "));
+    
+    tft.setCursor(90, 116);
     tft.print(Capdata[2],2);
-    tft.println(F(" pF "));
-    tft.println();
-    tft.print(F(" CDC = "));
-    tft.print(CDC);
-    tft.println(F("  "));
+    tft.print(F(" pF "));
   }
 
   tft.setCursor(260,230);
+  tft.setTextColor(COLOR_TEXT1,COLOR_BACKGROUND);
   tft.setTextSize(1);
   long loop_time = micros()-loop_start_time;
   tft.print((double)loop_time/1000.0,2);
@@ -200,8 +237,8 @@ void newfile()
     if (!SD.exists(filename)) {
       // only open a new file if it doesn't exist
       dataFile = SD.open(filename, FILE_WRITE);
-      tft.setCursor(20, 200);
-      tft.setTextColor(COLOR_TEXT2,COLOR_BACKGROUND);  
+      tft.setCursor(20, 195);
+      tft.setTextColor(COLOR_TEXT4,COLOR_BACKGROUND);  
       tft.setTextSize(2);
       tft.print(F("saving to ")); 
       tft.print(filename);
@@ -218,7 +255,7 @@ void datalog(double *Capdata)
   String dataString = "";
 
   // read data and append to the string:
-  for (int i = 0; i < 3; i++) {
+  for (byte i = 0; i < 3; i++) {
     char cbuf[10]; // temporary buffer to store double
     dtostrf(Capdata[i],5,2,cbuf); // converts from double to char
     dataString += cbuf;
